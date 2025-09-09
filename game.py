@@ -1,158 +1,94 @@
-# game.py
 import random
 from collections import deque
 
 class PlayerState:
-    def __init__(self, user_id:int, username:str):
+    def __init__(self, user_id, username):
         self.user_id = user_id
         self.username = username
-        self.x = 0.0   # world progress
-        self.y = 0.0   # vertical offset, 0 = on ground; negative when jumping (so render uses -y)
-        self.vy = 0.0
+        self.x = 20
+        self.y = 0
+        self.vy = 0
         self.alive = True
         self.score = 0
         self.jump_cool = 0
 
 class Obstacle:
-    def __init__(self, x:float, w:int=16, h:int=28):
+    def __init__(self, x):
         self.x = x
-        self.w = w
-        self.h = h
+        self.w = 16
+        self.h = random.choice([20,30])
 
 class GameSession:
-    def __init__(self, chat_id:int, session_id:str, players:list, max_players:int=3, finish_x:int=1600):
-        """
-        players: list of (user_id, username) tuples
-        """
+    def __init__(self, chat_id, session_id, players:list):
         self.chat_id = chat_id
         self.session_id = session_id
-        self.players = [PlayerState(uid, uname) for uid, uname in players]
-        self.max_players = max_players
-        self.finish_x = finish_x
+        self.players = [PlayerState(uid, uname) for uid,uname in players]
         self.obstacles = deque()
         self.tick = 0
-        self.speed = 6.0  # base player-forward speed per tick (world units)
+        self.speed = 4.0
         self.running = False
+        self.finish_x = 1200
         self.winner = None
-        self._spawn_timer = 20
-        self.creator_id = players[0][0] if players else None
-
-    def add_player(self, user_id:int, username:str):
-        if any(p.user_id == user_id for p in self.players):
-            return False, "already"
-        if len(self.players) >= self.max_players:
-            return False, "full"
-        self.players.append(PlayerState(user_id, username))
-        return True, None
-
-    def remove_player(self, user_id:int):
-        for p in self.players:
-            if p.user_id == user_id:
-                self.players.remove(p)
-                return True
-        return False
+        self._spawn_timer = 0
 
     def start(self):
         self.running = True
         self.tick = 0
-        self.obstacles.clear()
-        self._spawn_timer = 20
-        # reset players
-        for i,p in enumerate(self.players):
-            p.x = 20 + i*4
+        for p in self.players:
+            p.x = 20
             p.y = 0
-            p.vy = 0
             p.alive = True
             p.score = 0
-            p.jump_cool = 0
-        self.winner = None
-        self.speed = 5.0
+        self.obstacles.clear()
+        self._spawn_timer = 30
 
-    def jump_by_user(self, user_id:int):
-        idx = None
-        for i,p in enumerate(self.players):
-            if p.user_id == user_id:
-                idx = i
-                break
-        if idx is None:
-            return False, "not_in_game"
-        p = self.players[idx]
-        if not p.alive:
-            return False, "dead"
-        if p.jump_cool > 0:
-            return False, "cooldown"
-        # apply jump impulse
-        p.vy = -11.5
+    def jump(self, player_index:int):
+        p = self.players[player_index]
+        if not p.alive: return
+        if p.jump_cool>0: return
+        p.vy = -9
         p.jump_cool = 6
-        return True, None
 
     def update(self):
-        """
-        Advance one tick; updates physics, spawns obstacles, collision, returns state dict.
-        """
         self.tick += 1
+        self.speed += 0.002  # gradually increase speed
 
-        # spawn obstacles ahead of the farthest player
+        # spawn obstacles
         self._spawn_timer -= 1
         if self._spawn_timer <= 0:
-            farthest = max((p.x for p in self.players), default=0)
-            new_x = max(farthest + random.randint(120, 260), farthest + 120)
-            new_h = random.choice([20, 26, 34])
-            new_w = random.choice([12, 16, 20])
-            self.obstacles.append(Obstacle(new_x, w=new_w, h=new_h))
-            self._spawn_timer = random.randint(20, 50)
+            self._spawn_timer = random.randint(30,60)
+            obs_x = max([o.x for o in self.obstacles], default=200) + random.randint(120,260)
+            self.obstacles.append(Obstacle(obs_x))
 
-        # physics & collisions
+        # move obstacles
+        for o in list(self.obstacles):
+            o.x -= self.speed
+            if o.x + o.w < 0:
+                self.obstacles.popleft()
+
+        # update players
         for p in self.players:
-            if not p.alive:
-                continue
-            # forward progress
+            if not p.alive: continue
             p.x += self.speed * 0.6
-            # gravity
-            p.vy += 0.9
+            p.vy += 0.8
             p.y += p.vy
             if p.y > 0:
                 p.y = 0
                 p.vy = 0
-            if p.jump_cool > 0:
+            if p.jump_cool>0:
                 p.jump_cool -= 1
-
-            # collision detection
-            for o in list(self.obstacles):
-                # if player's world x overlaps obstacle x
-                # consider small bounding boxes: player width ~ 24
-                if (p.x + 6) >= o.x and (p.x - 6) <= (o.x + o.w):
-                    # if player is on ground (y >= 0) => collision
-                    if p.y >= 0:
-                        p.alive = False
-
+            # collision check
+            for o in self.obstacles:
+                if abs(p.x - o.x) < (o.w+10) and p.y >= 0:
+                    p.alive = False
             p.score = int(p.x)
-
-            # check finish
             if p.x >= self.finish_x and not self.winner:
                 self.winner = p
                 self.running = False
 
-        # remove obstacles behind all players
-        min_player_x = min((p.x for p in self.players), default=0)
-        while self.obstacles and (self.obstacles[0].x + 40) < (min_player_x - 40):
-            self.obstacles.popleft()
-
-        # speed ramp up slowly
-        self.speed = min(self.speed + 0.003, 12.0)
-
         if all(not p.alive for p in self.players):
             self.running = False
 
-        # prepare return state
-        states = []
-        for p in self.players:
-            states.append({
-                'x': p.x,
-                'y': p.y,
-                'alive': p.alive,
-                'username': p.username,
-                'score': p.score
-            })
-        obs_list = [{'x': o.x, 'w': o.w, 'h': o.h} for o in self.obstacles]
-        return {'tick': self.tick, 'states': states, 'scores': {i: self.players[i].score for i in range(len(self.players))}, 'winner': (self.winner.username if self.winner else None), 'obstacles': obs_list}
+        states = [{'x': int(p.x/(self.finish_x/700)), 'y': int(-p.y), 'alive': p.alive} for p in self.players]
+        scores = {i: self.players[i].score for i in range(len(self.players))}
+        return {'tick': self.tick, 'states': states, 'scores': scores, 'winner': self.winner.username if self.winner else None}
