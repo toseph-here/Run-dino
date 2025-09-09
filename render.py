@@ -1,4 +1,5 @@
 from PIL import Image, ImageDraw, ImageFont
+from flask import Flask
 
 FONT = None
 try:
@@ -39,3 +40,13 @@ def render_frame(states, tick, scores, obstacles, track_width=800, track_height=
         d.text((8,30 + i*14), f"P{i+1}: {scores.get(i,0)}", font=FONT, fill=(220,220,220))
 
     return img
+
+
+# ----------------------------
+# Flask app for Render hosting
+# ----------------------------
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Bot is running with Render!"
